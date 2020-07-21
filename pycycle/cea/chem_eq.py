@@ -195,6 +195,7 @@ class ChemEq(om.ImplicitComponent):
             print('n', n)
             print('P', P)
             print('n_moles', n_moles)
+            n[n<1e-10]=1e-10
             self.mu = H0_T - S0_T + np.log(n) + np.log(1e-5) - np.log(n_moles)
             np.seterr(all='warn')
 
