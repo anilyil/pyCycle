@@ -3,7 +3,7 @@ import numpy as np
 from pycycle.maps.map_data import MapData
 
 
-"""Python version of CFM56 Fan map from NPSS"""
+"""Python version of HBTF Fan map from NPSS"""
 FanMap = MapData()
 
 # Map design point values
@@ -11,7 +11,7 @@ FanMap.defaults = {}
 FanMap.defaults['alphaMap'] = 0.0
 FanMap.defaults['NcMap'] = 0.99
 FanMap.defaults['PR'] = 1.754
-FanMap.defaults['RlineMap'] = 2.200
+FanMap.defaults['RlineMap'] = 2.20
 FanMap.RlineStall = 1.0
 
 FanMap.alphaMap = np.array([0.000, 90.000])

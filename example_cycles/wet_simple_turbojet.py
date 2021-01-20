@@ -19,11 +19,11 @@ class WetTurbojet(pyc.Cycle):
 
         # Add engine elements
         self.pyc_add_element('fc', pyc.FlightConditions(thermo_data=wet_thermo_spec, use_WAR=True,
-                                    elements=pyc.WET_AIR_MIX))#WET_AIR_MIX contains standard dry air compounds as well as H2O
+                                    elements=pyc.WET_AIR_ELEMENTS))#WET_AIR_ELEMENTS contains standard dry air compounds as well as H2O
         self.pyc_add_element('inlet', pyc.Inlet(design=design, thermo_data=wet_thermo_spec,
-                                    elements=pyc.WET_AIR_MIX))
+                                    elements=pyc.WET_AIR_ELEMENTS))
         self.pyc_add_element('comp', pyc.Compressor(map_data=pyc.AXI5, design=design,
-                                    thermo_data=wet_thermo_spec, elements=pyc.WET_AIR_MIX,),
+                                    thermo_data=wet_thermo_spec, elements=pyc.WET_AIR_ELEMENTS,),
                                     promotes_inputs=['Nmech'])
 
         ###Note###
@@ -37,14 +37,14 @@ class WetTurbojet(pyc.Cycle):
         #a difficult time converging the trace amount of hydrocarbons "present" in the original flow.
 
         self.pyc_add_element('burner', pyc.Combustor(design=design,inflow_thermo_data=wet_thermo_spec,
-                                    thermo_data=janaf_thermo_spec, inflow_elements=pyc.WET_AIR_MIX,
-                                    air_fuel_elements=pyc.AIR_FUEL_MIX,
+                                    thermo_data=janaf_thermo_spec, inflow_elements=pyc.WET_AIR_ELEMENTS,
+                                    air_fuel_elements=pyc.AIR_FUEL_ELEMENTS,
                                     fuel_type='JP-7'))
         self.pyc_add_element('turb', pyc.Turbine(map_data=pyc.LPT2269, design=design,
-                                    thermo_data=janaf_thermo_spec, elements=pyc.AIR_FUEL_MIX,),
+                                    thermo_data=janaf_thermo_spec, elements=pyc.AIR_FUEL_ELEMENTS,),
                                     promotes_inputs=['Nmech'])
         self.pyc_add_element('nozz', pyc.Nozzle(nozzType='CD', lossCoef='Cv',
-                                    thermo_data=janaf_thermo_spec, elements=pyc.AIR_FUEL_MIX))
+                                    thermo_data=janaf_thermo_spec, elements=pyc.AIR_FUEL_ELEMENTS))
         self.pyc_add_element('shaft', pyc.Shaft(num_ports=2),promotes_inputs=['Nmech'])
         self.pyc_add_element('perf', pyc.Performance(num_nozzles=1, num_burners=1))
 
@@ -123,6 +123,10 @@ def viewer(prob, pt, file=sys.stdout):
     print a report of all the relevant cycle properties
     """
 
+    summary_data = (prob[pt+'.fc.Fl_O:stat:MN'], prob[pt+'.fc.alt'], prob[pt+'.inlet.Fl_O:stat:W'],
+                    prob[pt+'.perf.Fn'], prob[pt+'.perf.Fg'], prob[pt+'.inlet.F_ram'],
+                    prob[pt+'.perf.OPR'], prob[pt+'.perf.TSFC'])
+
     print(file=file, flush=True)
     print(file=file, flush=True)
     print(file=file, flush=True)
@@ -131,7 +135,7 @@ def viewer(prob, pt, file=sys.stdout):
     print("----------------------------------------------------------------------------", file=file, flush=True)
     print("                       PERFORMANCE CHARACTERISTICS", file=file, flush=True)
     print("    Mach      Alt       W      Fn      Fg    Fram     OPR     TSFC  ", file=file, flush=True)
-    print(" %7.5f  %7.1f %7.3f %7.1f %7.1f %7.1f %7.3f  %7.5f" %(prob[pt+'.fc.Fl_O:stat:MN'], prob[pt+'.fc.alt'],prob[pt+'.inlet.Fl_O:stat:W'],prob[pt+'.perf.Fn'],prob[pt+'.perf.Fg'],prob[pt+'.inlet.F_ram'],prob[pt+'.perf.OPR'],prob[pt+'.perf.TSFC']), file=file, flush=True)
+    print(" %7.5f  %7.1f %7.3f %7.1f %7.1f %7.1f %7.3f  %7.5f" %summary_data, file=file, flush=True)
 
 
     fs_names = ['fc.Fl_O', 'inlet.Fl_O', 'comp.Fl_O', 'burner.Fl_O',
@@ -164,46 +168,35 @@ class MPWetTurbojet(pyc.MPCycle):
         # Create design instance of model
         self.pyc_add_pnt('DESIGN', WetTurbojet())
 
-        pts = ['OD1']
-
-        for pt in pts:
-            self.pyc_add_pnt(pt, WetTurbojet(design=False))
-
-            self.set_input_defaults(pt+'.fc.MN', 0.000001),
-            self.set_input_defaults(pt+'.fc.alt', 0.0, units='ft'),
-            self.set_input_defaults(pt+'.balance.rhs:FAR', 11000.0, units='lbf')
-
-        self.pyc_add_cycle_param('burner.dPqP', .03)
-        self.pyc_add_cycle_param('nozz.Cv', 0.99)
-        self.pyc_add_cycle_param('fc.WAR', .001)
-
-        self.pyc_connect_des_od('comp.s_PR', 'comp.s_PR')
-        self.pyc_connect_des_od('comp.s_Wc', 'comp.s_Wc')
-        self.pyc_connect_des_od('comp.s_eff', 'comp.s_eff')
-        self.pyc_connect_des_od('comp.s_Nc', 'comp.s_Nc')
-
-        self.pyc_connect_des_od('turb.s_PR', 'turb.s_PR')
-        self.pyc_connect_des_od('turb.s_Wp', 'turb.s_Wp')
-        self.pyc_connect_des_od('turb.s_eff', 'turb.s_eff')
-        self.pyc_connect_des_od('turb.s_Np', 'turb.s_Np')
-
-        self.pyc_connect_des_od('inlet.Fl_O:stat:area', 'inlet.area')
-        self.pyc_connect_des_od('comp.Fl_O:stat:area', 'comp.area')
-        self.pyc_connect_des_od('burner.Fl_O:stat:area', 'burner.area')
-        self.pyc_connect_des_od('turb.Fl_O:stat:area', 'turb.area')
-
-        self.pyc_connect_des_od('nozz.Throat:stat:area', 'balance.rhs:W')
-
         self.set_input_defaults('DESIGN.fc.alt', 0.0, units='ft'),
         self.set_input_defaults('DESIGN.fc.MN', 0.000001),
         self.set_input_defaults('DESIGN.balance.rhs:FAR', 2370.0, units='degR'),
         self.set_input_defaults('DESIGN.balance.rhs:W', 11800.0, units='lbf'),
         self.set_input_defaults('DESIGN.Nmech', 8070.0, units='rpm'),
-
         self.set_input_defaults('DESIGN.inlet.MN', 0.60),
         self.set_input_defaults('DESIGN.comp.MN', 0.20),
         self.set_input_defaults('DESIGN.burner.MN', 0.20),
         self.set_input_defaults('DESIGN.turb.MN', 0.4),
+
+        self.pyc_add_cycle_param('burner.dPqP', .03)
+        self.pyc_add_cycle_param('nozz.Cv', 0.99)
+        self.pyc_add_cycle_param('fc.WAR', .001)
+
+        self.od_pts = ['OD1']
+        self.od_MNs = [0.000001,]
+        self.od_alts = [0,0,]
+        self.od_pwrs = [11000.0,]
+
+        for i, pt in enumerate(self.od_pts):
+            self.pyc_add_pnt(pt, WetTurbojet(design=False))
+
+            self.set_input_defaults(pt+'.fc.MN', self.od_MNs[i]),
+            self.set_input_defaults(pt+'.fc.alt', self.od_alts[i], units='ft'),
+            self.set_input_defaults(pt+'.balance.rhs:FAR', self.od_pwrs[i], units='lbf')
+
+        self.pyc_use_default_des_od_conns()
+
+        self.pyc_connect_des_od('nozz.Throat:stat:area', 'balance.rhs:W')
 
 
 if __name__ == "__main__":
@@ -214,12 +207,11 @@ if __name__ == "__main__":
 
     prob = om.Problem()
 
-    prob.model = MPWetTurbojet()
-    
-    pts = ['OD1']
+    prob.model = mp_wet_turbojet = MPWetTurbojet()
 
-    prob.setup(check=False)
+    prob.setup()
 
+    #Define the design point
     prob.set_val('DESIGN.comp.PR', 13.5),
     prob.set_val('DESIGN.comp.eff', 0.83),
     prob.set_val('DESIGN.turb.eff', 0.86),
@@ -231,7 +223,7 @@ if __name__ == "__main__":
     prob['DESIGN.fc.balance.Pt'] = 14.6955113159
     prob['DESIGN.fc.balance.Tt'] = 518.665288153
 
-    for pt in pts:
+    for i, pt in enumerate(mp_wet_turbojet.od_pts):
         prob[pt+'.balance.W'] = 166.073
         prob[pt+'.balance.FAR'] = 0.01680
         prob[pt+'.balance.Nmech'] = 8197.38
@@ -245,7 +237,7 @@ if __name__ == "__main__":
     prob.set_solver_print(level=2, depth=1)
     prob.run_model()
 
-    for pt in ['DESIGN']+pts:
+    for pt in ['DESIGN']+mp_wet_turbojet.od_pts:
         viewer(prob, pt)
 
     print()

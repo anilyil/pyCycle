@@ -14,12 +14,12 @@ class WetPropulsor(pyc.Cycle):
         design = self.options['design']
 
         self.pyc_add_element('fc', pyc.FlightConditions(thermo_data=thermo_spec, use_WAR=True,
-                                                  elements=pyc.WET_AIR_MIX))#WET_AIR_MIX contains standard dry air compounds as well as H2O
+                                                  elements=pyc.WET_AIR_ELEMENTS))#WET_AIR_ELEMENTS contains standard dry air compounds as well as H2O
 
-        self.pyc_add_element('inlet', pyc.Inlet(design=design, thermo_data=thermo_spec, elements=pyc.WET_AIR_MIX))
-        self.pyc_add_element('fan', pyc.Compressor(thermo_data=thermo_spec, elements=pyc.WET_AIR_MIX,
+        self.pyc_add_element('inlet', pyc.Inlet(design=design, thermo_data=thermo_spec, elements=pyc.WET_AIR_ELEMENTS))
+        self.pyc_add_element('fan', pyc.Compressor(thermo_data=thermo_spec, elements=pyc.WET_AIR_ELEMENTS,
                                                  design=design, map_data=pyc.FanMap, map_extrap=True))
-        self.pyc_add_element('nozz', pyc.Nozzle(thermo_data=thermo_spec, elements=pyc.WET_AIR_MIX))
+        self.pyc_add_element('nozz', pyc.Nozzle(thermo_data=thermo_spec, elements=pyc.WET_AIR_ELEMENTS))
         self.pyc_add_element('perf', pyc.Performance(num_nozzles=1, num_burners=0))
 
 
@@ -99,28 +99,28 @@ class MPWetPropulsor(pyc.MPCycle):
 
         design = self.pyc_add_pnt('design', WetPropulsor(design=True))
 
-        od = self.pyc_add_pnt('off_design', WetPropulsor(design=False))
-
-        self.pyc_add_cycle_param('pwr_target', -2600., units='kW')
-
-        self.pyc_connect_des_od('inlet.Fl_O:stat:area', 'inlet.area')
-
-        self.pyc_connect_des_od('fan.s_PR', 'fan.s_PR')
-        self.pyc_connect_des_od('fan.s_Wc', 'fan.s_Wc')
-        self.pyc_connect_des_od('fan.s_eff', 'fan.s_eff')
-        self.pyc_connect_des_od('fan.s_Nc', 'fan.s_Nc')
-        self.pyc_connect_des_od('fan.Fl_O:stat:area', 'fan.area')
-
-        self.pyc_connect_des_od('nozz.Throat:stat:area', 'balance.rhs:W')
-
         self.set_input_defaults('design.fc.alt', 10000., units="m")
         self.set_input_defaults('design.fc.MN', .72)
         self.set_input_defaults('design.inlet.MN', .6)
         self.set_input_defaults('design.fc.WAR', .001)
 
-        self.set_input_defaults('off_design.fc.alt', 10000, units='m')
-        self.set_input_defaults('off_design.fc.MN', 0.72)
-        self.set_input_defaults('off_design.fc.WAR', .001)
+        self.pyc_add_cycle_param('pwr_target', -2600., units='kW')
+
+        self.od_pts = ['off_design']
+        self.od_alts = [10000,]
+        self.od_MNs = [0.72,]
+        self.od_WARs = [.001,]
+
+        for i, pt in enumerate(self.od_pts):
+            self.pyc_add_pnt('off_design', WetPropulsor(design=False))
+
+            self.set_input_defaults(pt+'.fc.alt', self.od_alts[i], units='m')
+            self.set_input_defaults(pt+'.fc.MN', self.od_MNs[i])
+            self.set_input_defaults(pt+'.fc.WAR', self.od_WARs[i])
+
+        self.pyc_use_default_des_od_conns()
+
+        self.pyc_connect_des_od('nozz.Throat:stat:area', 'balance.rhs:W')
 
 if __name__ == "__main__":
     import time
@@ -132,15 +132,32 @@ if __name__ == "__main__":
     from openmdao.utils.units import convert_units as cu
 
     prob = om.Problem()
-    prob.model = MPWetPropulsor()
+    prob.model = mp_wet_propulsor = MPWetPropulsor()
+
+    prob.setup()
+
+    #Define the design point
+    prob.set_val('design.fan.PR', 1.2)
+    prob.set_val('design.fan.eff', 0.96)
+
+    # Set initial guesses for balances
+    prob['design.fc.MN'] = .8
+    prob['design.balance.W'] = 200.
+
+
+    for i, pt in enumerate(mp_wet_propulsor.od_pts):
+
+        # initial guesses    
+        prob['off_design.fc.MN'] = .8
+        prob['off_design.balance.W'] = 406.790
+        prob['off_design.balance.Nmech'] = 1.
+        prob['off_design.fan.PR'] = 1.2
+        prob['off_design.fan.map.RlineMap'] = 2.2
+
+    st = time.time()
 
     prob.set_solver_print(level=-1)
     prob.set_solver_print(level=2, depth=2)
-
-    prob.setup(check=False)
-
-    prob.set_val('design.fan.PR', 1.2)
-    prob.set_val('design.fan.eff', 0.96)
 
     prob.model.design.nonlinear_solver.options['atol'] = 1e-6
     prob.model.design.nonlinear_solver.options['rtol'] = 1e-6
@@ -149,20 +166,8 @@ if __name__ == "__main__":
     prob.model.off_design.nonlinear_solver.options['rtol'] = 1e-6
     prob.model.off_design.nonlinear_solver.options['maxiter'] = 10
 
-    # parameters
-    prob['design.fc.MN'] = .8
-    prob['off_design.fc.MN'] = .8
-
-    # initial guess
-    prob['design.balance.W'] = 200.
-
-    prob['off_design.balance.W'] = 406.790
-    prob['off_design.balance.Nmech'] = 1. # normalized value
-    prob['off_design.fan.PR'] = 1.2
-    prob['off_design.fan.map.RlineMap'] = 2.2
-
-    st = time.time()
     prob.run_model()
+
     run_time = time.time() - st
 
     print("design")

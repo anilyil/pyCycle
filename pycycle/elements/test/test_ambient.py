@@ -2,12 +2,12 @@ import numpy as np
 import unittest
 import os
 
-from openmdao.api import Problem, IndepVarComp
+from openmdao.api import Problem
+from openmdao.utils.assert_utils import assert_check_partials
 
 
 from pycycle.elements.ambient import Ambient
 
-from pycycle.elements.test.util import check_element_partials
 
 fpath = os.path.dirname(os.path.realpath(__file__))
 ref_data = np.loadtxt(fpath + "/reg_data/ambient.csv",
@@ -23,24 +23,18 @@ class FlowStartTestCase(unittest.TestCase):
 
         self.prob = Problem()
 
-
-        des_vars = self.prob.model.add_subsystem('des_vars', IndepVarComp())
-        des_vars.add_output('alt', 0, units='ft')
-        des_vars.add_output('dTs', 0, units='degR')
-
         self.prob.model.add_subsystem('amb', Ambient())
-        self.prob.model.connect('des_vars.alt', 'amb.alt')
-        self.prob.model.connect('des_vars.dTs', 'amb.dTs')
+        self.prob.model.set_input_defaults('amb.alt', 0, units='ft')
+        self.prob.model.set_input_defaults('amb.dTs', 0, units='degR')
 
-        self.prob.setup(check=False)
+        self.prob.setup(check=False, force_alloc_complex=True)
 
     def test_case1(self):
         np.seterr(divide='raise')
         # 6 cases to check against
         for i, data in enumerate(ref_data):
-            self.prob['des_vars.alt'] = data[h_map['alt']]
-            # self.prob['des_vars.MN'] = data[h_map['MN']]
-            self.prob['des_vars.dTs'] = data[h_map['dTs']]
+            self.prob['amb.alt'] = data[h_map['alt']]
+            self.prob['amb.dTs'] = data[h_map['dTs']]
 
             self.prob.run_model()
 
@@ -50,17 +44,18 @@ class FlowStartTestCase(unittest.TestCase):
             npss = data[h_map['Ps']]
             pyc = self.prob['amb.Ps']
             rel_err = abs(npss - pyc)/npss
-            # print( 'Ps:', npss, pyc, rel_err)
             self.assertLessEqual(rel_err, tol)
 
             npss = data[h_map['Ts']]
             pyc = self.prob['amb.Ts']
             rel_err = abs(npss - pyc)/npss
-            # print( 'Ts:', npss, pyc, rel_err)
             self.assertLessEqual(rel_err, tol)
 
-            # print()
-            check_element_partials(self, self.prob)
+            partial_data = self.prob.check_partials(out_stream=None, method='cs', 
+                                                    includes=['amb.*'], excludes=['*.base_thermo.*', 'amb.readAtmTable'])
+            assert_check_partials(partial_data, atol=1e-8, rtol=1e-8)
+
+
 
 if __name__ == "__main__":
     unittest.main()

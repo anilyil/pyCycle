@@ -1,13 +1,14 @@
 from pycycle.constants import (AIR_FUEL_MIX, AIR_MIX, WET_AIR_MIX, OXYGEN, OXYGEN_METHANE_MIX, 
                                OXYGEN_HYDROGEN_MIX, BTU_s2HP, HP_per_RPM_to_FT_LBF, 
                                R_UNIVERSAL_SI, R_UNIVERSAL_ENG, g_c, MIN_VALID_CONCENTRATION, 
-                               T_STDeng, P_STDeng, P_REF)
+                               T_STDeng, P_STDeng, P_REF, AIR_ELEMENTS, AIR_FUEL_ELEMENTS, 
+                               WET_AIR_ELEMENTS)
 
-from pycycle.cea import species_data
+from pycycle.thermo.cea import species_data
 
 from pycycle.elements.flow_start import FlowStart
 from pycycle.elements.cfd_start import CFDStart
-from pycycle.elements.inlet import Inlet
+from pycycle.elements.inlet import Inlet, MilSpecRecovery
 from pycycle.elements.duct import Duct
 from pycycle.elements.compressor import Compressor
 from pycycle.elements.combustor import Combustor
@@ -37,7 +38,8 @@ from pycycle.maps.ncp01 import NCP01
 from pycycle.connect_flow import connect_flow
 
 from pycycle.viewers import print_bleed, print_burner, print_compressor, print_flow_station, \
-                            print_mixer, print_nozzle, print_shaft, print_turbine
+                            print_mixer, print_nozzle, print_shaft, print_turbine, \
+                            plot_compressor_maps, plot_turbine_maps
 
 
 from pycycle.mp_cycle import MPCycle, Cycle

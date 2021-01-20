@@ -2,10 +2,9 @@
 
 import openmdao.api as om
 
-from pycycle.cea import species_data
-from pycycle.cea.set_static import SetStatic
-from pycycle.cea.set_total import SetTotal
-from pycycle.constants import AIR_FUEL_MIX, g_c
+from pycycle.constants import AIR_FUEL_ELEMENTS, g_c
+from pycycle.thermo.cea import species_data
+from pycycle.thermo.thermo import Thermo
 from pycycle.flow_in import FlowIn
 
 
@@ -309,7 +308,7 @@ class Nozzle(om.Group):
                               desc='If set to "Cfg", then Gross Thrust Coefficient is an input.')
         self.options.declare('thermo_data', default=species_data.janaf,
                               desc='thermodynamic data set', recordable=False)
-        self.options.declare('elements', default=AIR_FUEL_MIX,
+        self.options.declare('elements', default=AIR_FUEL_ELEMENTS,
                               desc='set of elements present in the flow')
         self.options.declare('internal_solver', default=False)
 
@@ -319,15 +318,12 @@ class Nozzle(om.Group):
         nozzType = self.options['nozzType']
         lossCoef = self.options['lossCoef']
 
-        gas_thermo = species_data.Thermo(thermo_data, init_reacts=elements)
-        self.gas_prods = gas_thermo.products
-
-        num_prod = len(self.gas_prods)
+        num_element = len(elements)
 
         self.add_subsystem('mach_choked', om.IndepVarComp('MN', 1.000, ))
 
         # Create inlet flow station
-        in_flow = FlowIn(fl_name="Fl_I", num_prods=num_prod)
+        in_flow = FlowIn(fl_name="Fl_I")
         self.add_subsystem('in_flow', in_flow, promotes_inputs=['Fl_I:*'])
 
         # PR_bal = self.add_subsystem('PR_bal', BalanceComp())
@@ -345,19 +341,25 @@ class Nozzle(om.Group):
                            promotes_outputs=['Ps_calc'])
 
         # Calculate throat total flow properties
-        throat_total = SetTotal(thermo_data=thermo_data, mode="h", init_reacts=elements,
-                                fl_name="Fl_O:tot")
+        throat_total = Thermo(mode='total_hP', fl_name='Fl_O:tot', 
+                              method='CEA', 
+                              thermo_kwargs={'elements':elements, 
+                                             'spec':thermo_data})
         prom_in = [('h', 'Fl_I:tot:h'),
-                   ('init_prod_amounts', 'Fl_I:tot:n')]
+                   ('composition', 'Fl_I:tot:composition')]
         self.add_subsystem('throat_total', throat_total, promotes_inputs=prom_in,
                            promotes_outputs=['Fl_O:*'])
         self.connect('press_calcs.Pt_th', 'throat_total.P')
 
         # Calculate static properties for sonic flow
+        throat_static_MN = Thermo(mode='static_MN', 
+                                  method='CEA', 
+                                  thermo_kwargs={'elements':elements, 
+                                                 'spec':thermo_data})
         prom_in = [('ht', 'Fl_I:tot:h'),
                    ('W', 'Fl_I:stat:W'),
-                   ('init_prod_amounts', 'Fl_I:tot:n')]
-        self.add_subsystem('staticMN', SetStatic(mode="MN", thermo_data=thermo_data, init_reacts=elements),
+                   ('composition', 'Fl_I:tot:composition')]
+        self.add_subsystem('staticMN', throat_static_MN,
                            promotes_inputs=prom_in)
         self.connect('throat_total.S', 'staticMN.S')
         self.connect('mach_choked.MN', 'staticMN.MN')
@@ -366,23 +368,31 @@ class Nozzle(om.Group):
         # self.connect('Fl_I.flow:flow_products','staticMN.init_prod_amounts')
 
         # Calculate static properties based on exit static pressure
+        throat_static_Ps = Thermo(mode='static_Ps', 
+                                  method='CEA', 
+                                  thermo_kwargs={'elements':elements, 
+                                                 'spec':thermo_data})
         prom_in = [('ht', 'Fl_I:tot:h'),
                    ('W', 'Fl_I:stat:W'),
                    ('Ps', 'Ps_calc'),
-                   ('init_prod_amounts', 'Fl_I:tot:n')]
-        self.add_subsystem('staticPs', SetStatic(mode="Ps", thermo_data=thermo_data, init_reacts=elements),
+                   ('composition', 'Fl_I:tot:composition')]
+        self.add_subsystem('staticPs', throat_static_Ps,
                            promotes_inputs=prom_in)
         self.connect('throat_total.S', 'staticPs.S')
         # self.connect('press_calcs.Ps_calc', 'staticPs.Ps')
         # self.connect('Fl_I.flow:flow_products','staticPs.init_prod_amounts')
 
         # Calculate ideal exit flow properties
+        ideal_flow = Thermo(mode='static_Ps', 
+                            method='CEA', 
+                            thermo_kwargs={'elements':elements, 
+                                                 'spec':thermo_data})
         prom_in = [('ht', 'Fl_I:tot:h'),
                    ('S', 'Fl_I:tot:S'),
                    ('W', 'Fl_I:stat:W'),
                    ('Ps', 'Ps_calc'),
-                   ('init_prod_amounts', 'Fl_I:tot:n')]
-        self.add_subsystem('ideal_flow', SetStatic(mode="Ps", thermo_data=thermo_data, init_reacts=elements),
+                   ('composition', 'Fl_I:tot:composition')]
+        self.add_subsystem('ideal_flow', ideal_flow,
                            promotes_inputs=prom_in)
         # self.connect('press_calcs.Ps_calc', 'ideal_flow.Ps')
         # self.connect('Fl_I.flow:flow_products','ideal_flow.init_prod_amounts')
@@ -448,87 +458,3 @@ class Nozzle(om.Group):
 
             newton.linesearch.options['iprint'] = -1
             self.linear_solver = om.DirectSolver(assemble_jac=True)
-
-    def configure(self):
-        newton = self.staticMN.statics.chem_eq.nonlinear_solver
-        # newton.options['atol'] = 1e-6
-        # newton.options['rtol'] = 1e-6
-
-        # newton.options['maxiter'] = 25
-
-
-
-if __name__ == "__main__":
-    from pycycle.connect_flow import connect_flow
-    from pycycle.constants import AIR_MIX
-    from pycycle.elements.flow_start import FlowStart
-
-    p = om.Problem()
-    p.model = om.Group()
-
-    p.model.add_subsystem('des_var1', om.IndepVarComp('W', 57.00, units='lbm/s'))
-    p.model.add_subsystem('des_var2', om.IndepVarComp('Pt', 14.0, units='lbf/inch**2'))
-    p.model.add_subsystem('des_var3', om.IndepVarComp('Tt', 1662.44, units='degR'))
-    p.model.add_subsystem('des_var4', om.IndepVarComp('dPqP', 0.0))
-    p.model.add_subsystem('des_var5', om.IndepVarComp('Ps_exhaust', 14.696, units='lbf/inch**2'))
-    p.model.add_subsystem('des_var6', om.IndepVarComp('Cv', 0.99, units=None))
-
-    p.model.add_subsystem('flow_start',FlowStart(thermo_data=species_data.janaf, elements=AIR_MIX))
-    p.model.add_subsystem('nozz', Nozzle(nozzType="CD", lossCoef='Cv', elements=AIR_MIX))
-
-    connect_flow(p.model, "flow_start.Fl_O", "nozz.Fl_I", connect_stat=False)
-
-    p.model.connect('des_var1.W', 'flow_start.W')
-    p.model.connect('des_var2.Pt', 'flow_start.P')
-    p.model.connect('des_var3.Tt', 'flow_start.T')
-    p.model.connect('des_var4.dPqP', 'nozz.dPqP')
-    p.model.connect('des_var5.Ps_exhaust', 'nozz.Ps_exhaust')
-    p.model.connect('des_var6.Cv', 'nozz.Cv')
-
-    # p.model.add('pressure', IndepVarComp('Ps_exhaust', 3.457820249, units='lbf/inch**2'), promotes=["*"])
-
-    p.setup(check=True)
-
-    # p.model.Fl_I.W = 51.45
-    # p.model.Fl_I.Pt = 9.262
-    # p.model.Fl_I.Tt = 1443.35
-    # # p.model.Fl_I.ht = 224.2005337
-    # p.model.Ps_exhaust = 3.457820249
-    # p.model.dPqP = 0.0
-    # # p.model.MNth = 1.0
-    # # p.model.throat_static.n2ls.Pt = 3.457820249
-
-    p.run_model()
-
-    # from openmdao.main.api import set_as_top
-    # nozzle = set_as_top(Nozzle())
-
-    # nozzle.Fl_I.W = 51.45
-    # nozzle.Fl_I.Pt = 9.262
-    # nozzle.Fl_I.Tt = 1443.35
-    # # nozzle.Fl_I.ht = 224.2005337
-    # nozzle.Ps_exhaust = 3.457820249
-    # nozzle.dPqP = 0.0
-    # nozzle.MNth = 1.0
-    # nozzle.throat_static.n2ls.Pt = 3.457820249
-
-    # nozzle.run()
-
-    print('Pt_th:  ', p['nozz.press_calcs.Pt_th'])
-    print('PR:     ', p['nozz.PR'])
-    print('S_th:   ', p['nozz.Fl_O:tot:S'])
-    print('ht_th:  ', p['nozz.Fl_O:tot:h'])
-    print('Ps_th:  ', p['nozz.Throat:stat:P'])
-    print('MN_th:  ', p['nozz.Throat:stat:MN'])
-    print('V_th:   ', p['nozz.Throat:stat:V'])
-    print('A_th:   ', p['nozz.Throat:stat:area'])
-
-    print('S_th:   ', p['nozz.Fl_O:tot:S'])
-    print('ht_th:  ', p['nozz.Fl_O:tot:h'])
-    print('Ps_out: ', p['nozz.Fl_O:stat:P'])
-    print('MN_out: ', p['nozz.Fl_O:stat:MN'])
-    print('V_out:  ', p['nozz.Fl_O:stat:V'])
-    print('A_out:  ', p['nozz.Fl_O:stat:area'])
-
-    print('Fg:     ', p['nozz.Fg'])
-    print('FgIdeal:', p['nozz.perf_calcs.Fg_ideal'])

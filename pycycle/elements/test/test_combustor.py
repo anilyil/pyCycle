@@ -6,12 +6,12 @@ import os
 import numpy as np
 
 from openmdao.api import Problem, Group, IndepVarComp
+from openmdao.utils.assert_utils import assert_near_equal, assert_check_partials
 
-from openmdao.utils.assert_utils import assert_rel_error
-
+from pycycle.constants import AIR_FUEL_ELEMENTS, AIR_ELEMENTS
+from pycycle.thermo.thermo import Thermo
+from pycycle.thermo.cea import species_data
 from pycycle.elements.combustor import Combustor
-
-from pycycle.elements.test.util import check_element_partials
 
 
 fpath = os.path.dirname(os.path.realpath(__file__))
@@ -30,41 +30,26 @@ class BurnerTestCase(unittest.TestCase):
     def test_case1(self):
 
         prob = Problem()
-        model = prob.model = Group()
+        model = prob.model 
 
-        n_init = np.array([3.23319258e-04, 1.00000000e-10, 1.10131241e-05, 1.00000000e-10,
-                           1.63212420e-10, 6.18813039e-09, 1.00000000e-10, 2.69578835e-02,
-                           1.00000000e-10, 7.23198770e-03])
 
-        model.add_subsystem(
-            'des_var1',
-            IndepVarComp(
-                'Fl_I:tot:P',
-                100.0,
-                units='lbf/inch**2'),
-            promotes=["*"])
-        model.add_subsystem(
-            'des_var2',
-            IndepVarComp(
-                'Fl_I:tot:h',
-                100.0,
-                units='Btu/lbm'),
-            promotes=["*"])
-        model.add_subsystem(
-            'des_var3',
-            IndepVarComp(
-                'Fl_I:stat:W',
-                100.0,
-                units='lbm/s'),
-            promotes=["*"])
-        model.add_subsystem('des_var4', IndepVarComp('Fl_I:FAR', 0.0), promotes=["*"])
-        model.add_subsystem('des_var5', IndepVarComp('MN', 0.5), promotes=["*"])
-        model.add_subsystem('des_var6', IndepVarComp('Fl_I:tot:n', n_init), promotes=["*"])
+        model.add_subsystem('ivc', IndepVarComp('in_composition', [3.23319235e-04, 1.10132233e-05, 
+                                                     5.39157698e-02, 1.44860137e-02]))
 
         model.add_subsystem('combustor', Combustor(), promotes=["*"])
+        model.set_input_defaults('Fl_I:tot:P', 100.0, units='lbf/inch**2')
+        model.set_input_defaults('Fl_I:tot:h', 100.0, units='Btu/lbm')
+        model.set_input_defaults('Fl_I:stat:W', 100.0, units='lbm/s')
+        model.set_input_defaults('Fl_I:FAR', 0.0)
+        model.set_input_defaults('MN', 0.5)
+
+
+        # needed because composition is sized by connection
+        model.connect('ivc.in_composition', ['Fl_I:tot:composition', 'Fl_I:stat:composition', ])
+
 
         prob.set_solver_print(level=2)
-        prob.setup(check=False)
+        prob.setup(check=False, force_alloc_complex=True)
 
         # 6 cases to check against
         for i, data in enumerate(ref_data):
@@ -77,6 +62,14 @@ class BurnerTestCase(unittest.TestCase):
             prob['MN'] = data[h_map['Fl_O.MN']]
 
             prob.run_model()
+
+            prob.model.combustor.mix_fuel.list_inputs(print_arrays=True)
+            prob.model.combustor.mix_fuel.list_outputs(print_arrays=True)
+            # print(prob['Fl_I:tot:composition'])
+            # print(prob['Fl_I:tot:n'])
+            # print(prob['Fl_I:tot:h'])
+            # print(prob['Fl_I:tot:P'])
+            # exit()
 
             # check outputs
             tol = 1.0e-2
@@ -119,8 +112,10 @@ class BurnerTestCase(unittest.TestCase):
 
             print('')
 
-            check_element_partials(self, prob, tol=1e-4)
-        # prob.check_partials()
+            partial_data = prob.check_partials(out_stream=None, method='cs', 
+                                               includes=['combustor.*',], excludes=['*.base_thermo.*',])
+            assert_check_partials(partial_data, atol=1e-8, rtol=1e-8)
+
 
 if __name__ == "__main__":
     unittest.main()

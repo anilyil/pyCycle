@@ -14,12 +14,12 @@ class Propulsor(pyc.Cycle):
         design = self.options['design']
 
         self.pyc_add_element('fc', pyc.FlightConditions(thermo_data=thermo_spec,
-                                                  elements=pyc.AIR_MIX))
+                                                  elements=pyc.AIR_ELEMENTS))
 
-        self.pyc_add_element('inlet', pyc.Inlet(design=design, thermo_data=thermo_spec, elements=pyc.AIR_MIX))
-        self.pyc_add_element('fan', pyc.Compressor(thermo_data=thermo_spec, elements=pyc.AIR_MIX,
+        self.pyc_add_element('inlet', pyc.Inlet(design=design, thermo_data=thermo_spec, elements=pyc.AIR_ELEMENTS))
+        self.pyc_add_element('fan', pyc.Compressor(thermo_data=thermo_spec, elements=pyc.AIR_ELEMENTS,
                                                  design=design, map_data=pyc.FanMap, map_extrap=True))
-        self.pyc_add_element('nozz', pyc.Nozzle(thermo_data=thermo_spec, elements=pyc.AIR_MIX))
+        self.pyc_add_element('nozz', pyc.Nozzle(thermo_data=thermo_spec, elements=pyc.AIR_ELEMENTS))
         self.pyc_add_element('perf', pyc.Performance(num_nozzles=1, num_burners=0))
 
 
@@ -83,7 +83,9 @@ class Propulsor(pyc.Cycle):
 
 
 def viewer(prob, pt):
-
+    """
+    print a report of all the relevant cycle properties
+    """
 
     fs_names = ['fc.Fl_O', 'inlet.Fl_O', 'fan.Fl_O', 'nozz.Fl_O']
     fs_full_names = [f'{pt}.{fs}' for fs in fs_names]
@@ -93,21 +95,37 @@ def viewer(prob, pt):
 
     pyc.print_nozzle(prob, [f'{pt}.nozz'])
 
+def map_plots(prob, pt):
+    comp_names = ['fan']
+    comp_full_names = [f'{pt}.{c}' for c in comp_names]
+    pyc.plot_compressor_maps(prob, comp_full_names)
+
+
 
 class MPpropulsor(pyc.MPCycle):
 
     def setup(self):
 
         design = self.pyc_add_pnt('design', Propulsor(design=True))
-        od = self.pyc_add_pnt('off_design', Propulsor(design=False))
-
         self.pyc_add_cycle_param('pwr_target', 100.)
+
+        # define the off-design conditions we want to run
+        self.od_pts = ['off_design']
+        self.od_MNs = [0.8,]
+        self.od_alts = [10000,]
+        self.od_Rlines = [2.2,]
+
+        for i, pt in enumerate(self.od_pts):
+            self.pyc_add_pnt(pt, Propulsor(design=False))
+
+            self.set_input_defaults(pt+'.fc.MN', val=self.od_MNs[i])
+            self.set_input_defaults(pt+'.fc.alt', val=self.od_alts, units='m') 
+            self.set_input_defaults(pt+'.fan.map.RlineMap', val=self.od_Rlines[i])        
+
         self.pyc_use_default_des_od_conns()
 
         self.pyc_connect_des_od('nozz.Throat:stat:area', 'balance.rhs:W')
-
-        self.set_input_defaults('design.fc.alt', 10000, units='m')
-        self.set_input_defaults('off_design.fc.alt', 10000, units='m') #12000
+        
 
 
 if __name__ == "__main__":
@@ -116,51 +134,48 @@ if __name__ == "__main__":
     import numpy as np
 
     prob = om.Problem()
-    prob.model = MPpropulsor()
+
+    prob.model = mp_propulsor = MPpropulsor()
+
+
+    prob.setup()
+
+    #Define the design point
+    prob.set_val('design.fc.alt', 10000, units='m')
+    prob.set_val('design.fc.MN', 0.8)
+    prob.set_val('design.inlet.MN', 0.6)
+    prob.set_val('design.fan.PR', 1.2)
+    prob.set_val('pwr_target', -3486.657, units='hp')
+    prob.set_val('design.fan.eff', 0.96)
+
+    # Set initial guesses for balances
+    prob['design.balance.W'] = 200.
+    
+    for i, pt in enumerate(mp_propulsor.od_pts):
+    
+        # initial guesses
+        prob['off_design.fan.PR'] = 1.2
+        prob['off_design.balance.W'] = 406.790
+        prob['off_design.balance.Nmech'] = 1. # normalized value
+
+    st = time.time()
 
     prob.set_solver_print(level=-1)
     prob.set_solver_print(level=2, depth=2)
-
-    prob.setup(check=False)
-    prob.final_setup()
-
     prob.model.design.nonlinear_solver.options['atol'] = 1e-6
     prob.model.design.nonlinear_solver.options['rtol'] = 1e-6
 
     prob.model.off_design.nonlinear_solver.options['atol'] = 1e-6
     prob.model.off_design.nonlinear_solver.options['rtol'] = 1e-6
 
-    prob['design.fc.MN'] = 0.8
-    prob['design.inlet.MN'] = 0.6#
-    prob['design.fan.PR'] = 1.2#
-    prob['pwr_target'] = -3486.657 # -2600
-    prob['design.fan.eff'] = 0.96#
-
-    prob['off_design.fc.MN'] = 0.8#
-
-    ########################
-    # initial guesses
-    ########################
-
-    prob['design.balance.W'] = 200.
-
-    prob['off_design.balance.W'] = 406.790
-    prob['off_design.balance.Nmech'] = 1. # normalized value
-    prob['off_design.fan.PR'] = 1.2
-    prob['off_design.fan.map.RlineMap'] = 2.2
-
-    st = time.time()
     prob.run_model()
     run_time = time.time() - st
 
-    print("design")
+    for pt in ['design']+mp_propulsor.od_pts:
+        print('\n', '#'*10, pt, '#'*10)
+        viewer(prob, pt)
 
-    viewer(prob, 'design')
+    map_plots(prob,'design')
 
-    print("######"*10)
-    print("######"*10)
-    print("######"*10)
-
-    viewer(prob, 'off_design')
 
     print("Run time", run_time)

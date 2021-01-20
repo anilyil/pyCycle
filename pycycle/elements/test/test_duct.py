@@ -5,16 +5,15 @@ import os
 
 import numpy as np
 
-from openmdao.api import Problem, Group, IndepVarComp
-from openmdao.utils.assert_utils import assert_rel_error
+from openmdao.api import Problem, Group
+from openmdao.utils.assert_utils import assert_near_equal, assert_check_partials
 
-from pycycle.cea.species_data import janaf
+from pycycle.mp_cycle import Cycle
+from pycycle.thermo.cea.species_data import janaf
 from pycycle.elements.duct import Duct
 from pycycle.elements.flow_start import FlowStart
-from pycycle.constants import AIR_MIX
-
-from pycycle.elements.test.util import check_element_partials
-from pycycle.connect_flow import connect_flow
+from pycycle.constants import AIR_ELEMENTS
+from pycycle import constants
 
 
 fpath = os.path.dirname(os.path.realpath(__file__))
@@ -54,39 +53,32 @@ class DuctTestCase(unittest.TestCase):
     def test_case1(self):
 
         self.prob = Problem()
-        self.prob.model = Group()
-        self.prob.model.add_subsystem('flow_start', FlowStart(thermo_data=janaf,
-                                                              elements=AIR_MIX))
-        self.prob.model.add_subsystem('duct', Duct(elements=AIR_MIX))
+        cycle = self.prob.model = Cycle()
+        cycle.add_subsystem('flow_start', FlowStart(thermo_data=janaf,
+                                                              elements=AIR_ELEMENTS), promotes=['MN', 'P', 'T'])
+        cycle.add_subsystem('duct', Duct(elements=AIR_ELEMENTS), promotes=['MN'])
 
-        connect_flow(self.prob.model, 'flow_start.Fl_O', 'duct.Fl_I')
+        cycle.pyc_connect_flow('flow_start.Fl_O', 'duct.Fl_I')
 
-        des_vars = self.prob.model.add_subsystem('des_vars', IndepVarComp(), promotes=['*'])
-        des_vars.add_output('P', 17., units='psi')
-        des_vars.add_output('T', 500., units='degR')
-        des_vars.add_output('W', 500., units='lbm/s')
-        des_vars.add_output('MN', 0.5)
-        des_vars.add_output('dPqP_des', 0.0)
+        cycle.set_input_defaults('MN', 0.5)
+        cycle.set_input_defaults('duct.dPqP', 0.0)
+        cycle.set_input_defaults('P', 17., units='psi')
+        cycle.set_input_defaults('T', 500., units='degR')
+        cycle.set_input_defaults('flow_start.W', 500., units='lbm/s')
 
-        self.prob.model.connect("P", "flow_start.P")
-        self.prob.model.connect("T", "flow_start.T")
-        self.prob.model.connect("W", "flow_start.W")
-        self.prob.model.connect("MN", ["duct.MN", "flow_start.MN"])
-        self.prob.model.connect("dPqP_des", "duct.dPqP")
-
-        self.prob.setup(check=False)
+        self.prob.setup(check=False, force_alloc_complex=True)
         self.prob.set_solver_print(level=-1)
 
         # 6 cases to check against
         for i, data in enumerate(ref_data):
 
-            self.prob['dPqP_des'] = data[h_map['dPqP']]
+            self.prob['duct.dPqP'] = data[h_map['dPqP']]
 
             # input flowstation
             self.prob['P'] = data[h_map['Fl_I.Pt']]
             self.prob['T'] = data[h_map['Fl_I.Tt']]
             self.prob['MN'] = data[h_map['Fl_O.MN']]
-            self.prob['W'] = data[h_map['Fl_I.W']]
+            self.prob['flow_start.W'] = data[h_map['Fl_I.W']]
             self.prob['duct.Fl_I:stat:V'] = data[h_map['Fl_I.V']]
 
             # give a decent initial guess for Ps
@@ -104,54 +96,49 @@ class DuctTestCase(unittest.TestCase):
             ts_computed = self.prob['duct.Fl_O:stat:T']
 
             tol = 2.0e-2
-            assert_rel_error(self, pt_computed, pt, tol)
-            assert_rel_error(self, ht_computed, ht, tol)
-            assert_rel_error(self, ps_computed, ps, tol)
-            assert_rel_error(self, ts_computed, ts, tol)
+            assert_near_equal(pt_computed, pt, tol)
+            assert_near_equal(ht_computed, ht, tol)
+            assert_near_equal(ps_computed, ps, tol)
+            assert_near_equal(ts_computed, ts, tol)
 
-            check_element_partials(self, self.prob)
+            partial_data = self.prob.check_partials(out_stream=None, method='cs', 
+                                                    includes=['duct.*'], excludes=['*.base_thermo.*',])
+            assert_check_partials(partial_data, atol=1e-8, rtol=1e-8)
+
 
 
     def test_case_with_dPqP_MN(self):
 
         self.prob = Problem()
-        self.prob.model = Group()
-        self.prob.model.add_subsystem('flow_start', FlowStart(thermo_data=janaf,
-                                                              elements=AIR_MIX))
-        self.prob.model.add_subsystem('flow_start_OD', FlowStart(thermo_data=janaf,
-                                                              elements=AIR_MIX))
+        cycle = self.prob.model = Cycle()
+        cycle.add_subsystem('flow_start', FlowStart(thermo_data=janaf,
+                                                              elements=AIR_ELEMENTS), promotes=['P', 'T', 'MN', 'W'])
+        cycle.add_subsystem('flow_start_OD', FlowStart(thermo_data=janaf,
+                                                              elements=AIR_ELEMENTS), promotes=['P', 'T', 'W'])
 
         expMN = 1.0
-        self.prob.model.add_subsystem('duct_des', Duct(elements=AIR_MIX, expMN=expMN))
-        self.prob.model.add_subsystem('duct_OD', Duct(elements=AIR_MIX, expMN=expMN, design=False))
+        cycle.add_subsystem('duct_des', Duct(elements=AIR_ELEMENTS, expMN=expMN), promotes=['MN'])
+        cycle.add_subsystem('duct_OD', Duct(elements=AIR_ELEMENTS, expMN=expMN, design=False))
 
-        connect_flow(self.prob.model, 'flow_start.Fl_O', 'duct_des.Fl_I')
-        connect_flow(self.prob.model, 'flow_start_OD.Fl_O', 'duct_OD.Fl_I')
+        cycle.pyc_connect_flow('flow_start.Fl_O', 'duct_des.Fl_I')
+        cycle.pyc_connect_flow('flow_start_OD.Fl_O', 'duct_OD.Fl_I')
 
-        des_vars = self.prob.model.add_subsystem('des_vars', IndepVarComp(), promotes=['*'])
-        des_vars.add_output('P', 17., units='psi')
-        des_vars.add_output('T', 500., units='degR')
-        des_vars.add_output('W', 500., units='lbm/s')
-        des_vars.add_output('MN', 0.5)
-        des_vars.add_output('MN_OD', 0.25)
-        des_vars.add_output('dPqP_des', 0.0)
+        cycle.set_input_defaults('P', 17., units='psi')
+        cycle.set_input_defaults('T', 500., units='degR')
+        cycle.set_input_defaults('MN', 0.5)
+        cycle.set_input_defaults('flow_start_OD.MN', 0.25)
+        cycle.set_input_defaults('duct_des.dPqP', 0.0)
+        cycle.set_input_defaults('W', 500., units='lbm/s')
 
-        self.prob.model.connect("P", ["flow_start.P", 'flow_start_OD.P'])
-        self.prob.model.connect("T", ["flow_start.T", 'flow_start_OD.T'])
-        self.prob.model.connect("W", ["flow_start.W", 'flow_start_OD.W'])
-        self.prob.model.connect("MN", ["duct_des.MN", "flow_start.MN"])
-        self.prob.model.connect("MN_OD", "flow_start_OD.MN")
-        self.prob.model.connect("duct_des.s_dPqP", "duct_OD.s_dPqP")
-        self.prob.model.connect("duct_des.Fl_O:stat:area", "duct_OD.area")
-        self.prob.model.connect("dPqP_des", "duct_des.dPqP")
+        cycle.connect("duct_des.s_dPqP", "duct_OD.s_dPqP")
+        cycle.connect("duct_des.Fl_O:stat:area", "duct_OD.area")
 
-
-        self.prob.setup(check=False)
+        self.prob.setup(check=False, force_alloc_complex=True)
         self.prob.set_solver_print(level=-1)
 
 
         data = ref_data[0]
-        self.prob['dPqP_des'] = data[h_map['dPqP']]
+        self.prob['duct_des.dPqP'] = data[h_map['dPqP']]
 
         # input flowstation
         self.prob['P'] = data[h_map['Fl_I.Pt']]
@@ -175,12 +162,14 @@ class DuctTestCase(unittest.TestCase):
         ts_computed = self.prob['duct_OD.Fl_O:stat:T']
 
         tol = 1.0e-4
-        assert_rel_error(self, pt_computed, 8.84073152, tol)
-        assert_rel_error(self, ht_computed, ht, tol)
-        assert_rel_error(self, ps_computed, 8.26348914, tol)
-        assert_rel_error(self, ts_computed, ts, tol)
+        assert_near_equal(pt_computed, 8.84073152, tol)
+        assert_near_equal(ht_computed, ht, tol)
+        assert_near_equal(ps_computed, 8.26348914, tol)
+        assert_near_equal(ts_computed, ts, tol)
 
-        check_element_partials(self, self.prob)
+        partial_data = self.prob.check_partials(out_stream=None, method='cs', 
+                                                    includes=['duct_OD.*'], excludes=['*.base_thermo.*',])
+        assert_check_partials(partial_data, atol=1e-8, rtol=1e-8)
 
 if __name__ == "__main__":
     unittest.main()

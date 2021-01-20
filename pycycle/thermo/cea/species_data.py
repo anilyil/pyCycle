@@ -1,20 +1,24 @@
+from collections import OrderedDict
+
 import numpy as np
 from scipy import interpolate
 
-from collections import OrderedDict
+from pycycle import constants
 
-from pycycle.cea.thermo_data import co2_co_o2
-from pycycle.cea.thermo_data import janaf
-from pycycle.cea.thermo_data import wet_air
+from pycycle.thermo.cea.thermo_data import co2_co_o2
+from pycycle.thermo.cea.thermo_data import janaf
+from pycycle.thermo.cea.thermo_data import wet_air
 
 #from ad.admath import log
 from numpy import log
-class Thermo(object):
+class Properties(object):
     """Compute H, S, Cp given a species and temperature"""
-    def __init__(self, thermo_data_module, init_reacts=None):
+    
+    def __init__(self, thermo_data_module, init_elements=None):
 
         self.a = None
         self.a_T = None
+        self.b0 = None
         self.element_wt = None
         self.aij = None
         self.products = None
@@ -22,11 +26,86 @@ class Thermo(object):
         self.temp_ranges = None
         self.valid_temp_range = None
         self.wt_mole = None # array of mole weights
-        self.init_prod_amounts = None # concentrations (sum to 1)
         self.thermo_data_module = thermo_data_module
-        self.init_reacts = init_reacts
+        self.prod_data = self.thermo_data_module.products
+        self.init_elements = init_elements
         self.temp_base = None # array of lowest end of lowest temperature range
-        self.set_data(thermo_data_module, init_reacts)
+
+        if init_elements is not None :
+
+            elem_set = set(init_elements.keys())
+            self.elements = sorted(elem_set)
+
+
+            valid_elements = set()
+
+            for compound in self.prod_data.keys():
+                valid_elements.update(self.prod_data[compound]['elements'].keys())
+                
+            for element in self.elements:
+                if element not in valid_elements:
+                    if element in self.prod_data.keys():
+                        raise ValueError(f'The provided element `{element}` is a product in your provided thermo data, but is not an element.')
+                    else:
+                        raise ValueError(f'The provided element `{element}` is not used in any products in your thermo data.')
+
+            self.products = [name for name, prod_data in self.prod_data.items()
+                         if elem_set.issuperset(prod_data['elements'])]
+        
+        else:
+                raise ValueError('You have not provided `init_elements`. In order to set thermodynamic data it must be provided.')
+
+        ### setting up object attributes ###
+        element_list = sorted(self.elements)
+
+        self.num_element = len(element_list)
+        self.num_prod = len(self.products)
+
+        self.a = np.zeros((self.num_prod, 10))
+        self.a_T = self.a.T
+
+        element_wt = []
+        aij = []
+
+        for e in element_list:
+            element_wt.append(self.thermo_data_module.element_wts[e])
+
+            row = [self.prod_data[r]['elements'].get(e,0) for r in self.products]
+            aij.append(row)
+
+        self.element_wt = np.array(element_wt)
+        self.aij = np.array(aij)
+
+        self.wt_mole = np.empty(self.num_prod)
+        for i,r in enumerate(self.products):
+            self.wt_mole[i] = self.prod_data[r]['wt']
+
+        #### pre-computed constants used in calculations ###
+        aij_prod = np.empty((self.num_element,self.num_element, self.num_prod))
+        for i in range(self.num_element):
+            for j in range(self.num_element):
+                aij_prod[i][j] = self.aij[i]*self.aij[j]
+
+        self.aij_prod = aij_prod
+
+        self.aij_prod_deriv = np.zeros((self.num_element**2,self.num_prod))
+        for k in range(self.num_element**2):
+            for l in range(self.num_prod):
+                i = k//self.num_element
+                j = np.mod(k,self.num_element)
+                self.aij_prod_deriv[k][l] = self.aij_prod[i][j][l]
+
+        #### Computing b0 values ###
+        self.b0 = np.zeros(self.num_element)
+        for i,e in enumerate(element_list): 
+            self.b0[i] = self.init_elements[e]
+
+        self.b0 = self.b0*self.element_wt
+        self.b0 = self.b0/np.sum(self.b0)
+        self.b0 = self.b0/self.element_wt
+
+        self.build_coeff_table(999) # just pick arbitrary default temperature so there is something there right away
+        
 
     def H0(self, Tt): # standard-state molar enthalpy for species j at temp T
         Tt = Tt[0]
@@ -71,83 +150,6 @@ class Thermo(object):
         a_T = self.a_T
         return vec*(-2*a_T[0]/Tt**3 - a_T[1]/Tt**2 + a_T[3] + 2.*a_T[4]*Tt + 3.*a_T[5]*Tt**2 + 4.*a_T[6]*Tt**3)
 
-    def set_data(self, thermo_data_module, init_reacts=None):
-        """computes the relevant quantities, given the recatant data"""
-
-        self.thermo_data = thermo_data_module
-        self.prod_data = thermo_data_module.products
-
-        elements = set()
-
-        if init_reacts is None:
-            init_reacts = thermo_data_module.init_prod_amounts
-
-        #expand the init_reacts out to include all products, not just those provided
-        full_init_react = OrderedDict()
-        for p in self.prod_data:
-            # initial amounts need to be given in mass ratios
-            if p in init_reacts:
-                full_init_react[p] = init_reacts[p] * self.prod_data[p]['wt']
-            else:
-                full_init_react[p] = 0.
-
-        init_reacts = full_init_react
-
-        for name in init_reacts: # figure out which elements are present
-            if init_reacts[name] > 0:
-                elements.update(self.prod_data[name]['elements'])
-
-        init_prod_amounts = [init_reacts[name] for name in init_reacts
-                             if elements.issuperset(self.prod_data[name]['elements'])]
-
-        self.elements = sorted(elements)
-        self.init_prod_amounts = np.array(init_prod_amounts)
-        self.init_prod_amounts = self.init_prod_amounts/np.sum(self.init_prod_amounts) # normalize to 1
-
-        self.products = [name for name, prod_data in self.prod_data.items()
-                         if elements.issuperset(prod_data['elements'])]
-
-        self.num_element = len(self.elements)
-        self.num_prod = len(self.products)
-
-        self.a = np.zeros((self.num_prod, 10))
-        self.a_T = self.a.T
-
-        element_wt = []
-        aij = []
-
-        for e in self.elements:
-            element_wt.append(thermo_data_module.element_wts[e])
-
-            row = [self.prod_data[r]['elements'].get(e,0) for r in self.products]
-            aij.append(row)
-
-        self.wt_mole = np.empty(self.num_prod)
-        for i,r in enumerate(self.products):
-            self.wt_mole[i] = self.prod_data[r]['wt']
-
-        self.init_prod_amounts /= self.wt_mole
-
-        self.element_wt = np.array(element_wt)
-        self.aij = np.array(aij)
-
-        # pre-computed constants used in calculations
-        aij_prod = np.empty((self.num_element,self.num_element, self.num_prod))
-        for i in range(self.num_element):
-            for j in range(self.num_element):
-                aij_prod[i][j] = self.aij[i]*self.aij[j]
-
-        self.aij_prod = aij_prod
-
-        self.aij_prod_deriv = np.zeros((self.num_element**2,self.num_prod))
-        for k in range(self.num_element**2):
-            for l in range(self.num_prod):
-                i = k//self.num_element
-                j = np.mod(k,self.num_element)
-                self.aij_prod_deriv[k][l] = self.aij_prod[i][j][l]
-
-        self.build_coeff_table(999) # just pick arbitrary default temperature so there is something there right away
-
     def build_coeff_table(self, Tt):
         """Build the temperature specific coeff array and find the highest-low value and
         the lowest-high value of temperatures from all the reactants to give the
@@ -182,21 +184,3 @@ class Thermo(object):
 
         self.valid_temp_range = (max_low, min_high)
 
-if __name__ == "__main__":
-    thermo = Thermo(janaf)
-
-    T = np.ones(len(thermo.products))*800
-    H0 = thermo.H0(T)
-    S0 = thermo.S0(T)
-    Cp0 = thermo.Cp0(T)
-
-    HJ = thermo.H0_applyJ(T, 1.)
-    SJ = thermo.S0_applyJ(T, 1)
-    CpJ = thermo.Cp0_applyJ(T, 1)
-    print('\nT', T)
-    print('\nH0', H0)
-    print('\nS0', S0)
-    print('\nCp0', Cp0)
-    print('\nHJ', HJ)
-    print('\nSJ', SJ)
-    print('\nCpJ', CpJ, '\n')
