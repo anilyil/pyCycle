@@ -7,3 +7,5 @@
 pycycle.egg-info/*
 /build*
 *testflo_report.out
+example_cycles/*.pdf
+example_cycles/*.html
