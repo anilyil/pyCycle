@@ -2,7 +2,7 @@ from collections import namedtuple
 
 import warnings
 
-import openmdao.api as om 
+import openmdao.api as om
 import networkx as nx
 
 from pycycle.element_base import Element
@@ -10,7 +10,7 @@ from pycycle.thermo.cea import species_data
 from pycycle.constants import ALLOWED_THERMOS
 
 
-class Cycle(om.Group): 
+class Cycle(om.Group):
 
 
     def initialize(self):
@@ -20,7 +20,7 @@ class Cycle(om.Group):
                               desc='Method for computing thermodynamic properties')
 
         self.options.declare('thermo_data', default=species_data.janaf,
-                              desc='thermodynamic data set.', 
+                              desc='thermodynamic data set.',
                               recordable=False)
 
         self._elements = set()
@@ -32,20 +32,20 @@ class Cycle(om.Group):
 
         self._children = {}
 
-    def _setup_check(self): 
+    def _setup_check(self):
 
-        if not self._base_class_super_called: 
+        if not self._base_class_super_called:
             raise NotImplementedError(f"`super.setup()` has not been called within the setup method of f{self.__class__}")
-        
+
     def pyc_add_element(self, name, element, **kwargs):
         """
-        A thin wrapper around `add_subsystem` to keep track of 
-        the elements in a given cycle, separate from the general 
+        A thin wrapper around `add_subsystem` to keep track of
+        the elements in a given cycle, separate from the general
         components (e.g. BalanceComp, ExecComp, etc.)
         """
 
         warnings.simplefilter('always', DeprecationWarning)
-        warnings.warn(f"Deprecation warning: `pyc_add_element` function is deprecated because it is no longer needed. " 
+        warnings.warn(f"Deprecation warning: `pyc_add_element` function is deprecated because it is no longer needed. "
                        "Use the `add_subsystem` method." )
         warnings.simplefilter('ignore', DeprecationWarning)
 
@@ -54,13 +54,13 @@ class Cycle(om.Group):
 
     def add_subsystem(self, name, subsys, **kwargs):
         """
-        Customized version of the OpenMDAO Group API method that does 
+        Customized version of the OpenMDAO Group API method that does
         additional tracking of elements for the Cycle
         """
 
         self._children[name] = subsys
 
-        if isinstance(subsys, Element): 
+        if isinstance(subsys, Element):
             self._elements.add(subsys)
             if 'thermo_method' in subsys.options:
                 subsys.options['thermo_method'] = self.options['thermo_method']
@@ -71,7 +71,7 @@ class Cycle(om.Group):
         return super().add_subsystem(name, subsys, **kwargs)
 
 
-    def setup(self): 
+    def setup(self):
 
         self._base_class_super_called = True
 
@@ -88,29 +88,29 @@ class Cycle(om.Group):
         visited = set() # use a set, because checking "in" on a queue is slow
 
 
-        # loop over all child subsystems and push down cycle level options 
+        # loop over all child subsystems and push down cycle level options
         cycle_level_options = ['thermo_method', 'thermo_data', 'design']
         for child_name, child in self._children.items():
-            for opt in cycle_level_options: 
-                if opt in child.options: 
+            for opt in cycle_level_options:
+                if opt in child.options:
                     child.options[opt] = self.options[opt]
 
 
-        # note: three kinds of nodes in graph, elements, in_ports, out_ports. 
-        #       The graph is a tree with (potentially) multiple separate root nodes. 
-        #       We will do a breadth first search, starting from all starting nodes at the same time. 
+        # note: three kinds of nodes in graph, elements, in_ports, out_ports.
+        #       The graph is a tree with (potentially) multiple separate root nodes.
+        #       We will do a breadth first search, starting from all starting nodes at the same time.
         #       This makes sure that Elements with multiple inputs will have all
-        #       predecessors set up before we get to them. 
+        #       predecessors set up before we get to them.
         while queue:
-            node = queue.pop(0) 
+            node = queue.pop(0)
             node_type = node_types[node]
 
             # make sure we've already processed all predecessor nodes
             # if not skip this one, we'll hit it again later
             ready_for_node = True
 
-            for p in G.predecessors(node): 
-                if p not in visited: 
+            for p in G.predecessors(node):
+                if p not in visited:
                     ready_for_node = False
                     break
             if not ready_for_node:
@@ -118,27 +118,27 @@ class Cycle(om.Group):
 
             queue.extend(G.successors(node))
 
-            if node not in visited: 
+            if node not in visited:
 
-                if node_type == 'element': 
+                if node_type == 'element':
                     node_element = self._get_subsystem(node)
                     node_element.pyc_setup_output_ports()
 
                 # connection will be out_port -> in_port
-                elif node_type == 'out_port': 
+                elif node_type == 'out_port':
                     src_element = self._get_subsystem(node_parents[node])
                     links = G.out_edges(node)
-                    for link in links: 
-                        # in almost every case there should only be one link, because otherwise you are creating extra mass flow 
+                    for link in links:
+                        # in almost every case there should only be one link, because otherwise you are creating extra mass flow
                         # the one exception is for the cooling calcs, which get some "weak" connections from turbine and bleed srcs
-                        
+
                         target_element = self._get_subsystem(node_parents[link[1]])
 
                         out_port = node_port_names[node]
                         in_port = node_port_names[link[1]]
                         # this passes whatever configuration data there was from the src element to the target keyed by port names
 
-                        if out_port not in src_element.Fl_O_data: 
+                        if out_port not in src_element.Fl_O_data:
                             raise RuntimeError(f'in {self.pathname},{src_element.pathname}.{out_port} has not been properly setup.'
                                                f'something is wrong with one of your `pyc_setup_output_ports` method in {src_element.pathname}')
 
@@ -148,8 +148,8 @@ class Cycle(om.Group):
 
 
     def pyc_connect_flow(self, fl_src, fl_target, connect_stat=True, connect_tot=True, connect_w=True):
-        """ 
-        helper function to connect all of the flow variables between two ports 
+        """
+        helper function to connect all of the flow variables between two ports
         """
 
         # always connect compositions, because these are shape_by_conn=True
@@ -180,7 +180,7 @@ class Cycle(om.Group):
         # element nodes are needed so we can map from flow ports through elements
         # self._flow_graph.add_node(src_element_name, type='element')
         # self._flow_graph.add_node(target_elment_name, type='element')
-        
+
         self._flow_graph.add_node(fl_src, type='out_port', parent=src_element_name, port_name=src_port_name)
         self._flow_graph.add_node(fl_target, type='in_port', parent=target_elment_name, port_name=target_port_name)
 
@@ -188,9 +188,9 @@ class Cycle(om.Group):
         self._flow_graph.add_edge(fl_src, fl_target)
         self._flow_graph.add_edge(fl_target, target_elment_name)
 
-class MPCycle(om.Group): 
+class MPCycle(om.Group):
 
-    def __init__(self, **kwargs): 
+    def __init__(self, **kwargs):
         self._cycle_params = {}
         self._des_pnt = None
         self._od_pnts= []
@@ -199,16 +199,16 @@ class MPCycle(om.Group):
         super(MPCycle, self).__init__(**kwargs)
 
 
-    def pyc_add_cycle_param(self, name, val, units=None): 
+    def pyc_add_cycle_param(self, name, val, units=None):
 
         # TODO: Throw error if this is called after setup
 
-        if name in self._cycle_params: 
+        if name in self._cycle_params:
             raise ValueError(f'A cycle parameter named `{name}` already exits.')
 
         self._cycle_params[name] = (val, units)
 
-    def pyc_connect_des_od(self, src, target): 
+    def pyc_connect_des_od(self, src, target):
         if self._des_pnt is None:
             raise ValueError('Cannot connect between design and off design because no design point has been created. Use pyc_add_pnt to add a design point.')
 
@@ -217,7 +217,7 @@ class MPCycle(om.Group):
 
         self._des_od_connections.append((src, target))
 
-    def pyc_use_default_des_od_conns(self, skip=None): 
+    def pyc_use_default_des_od_conns(self, skip=None):
         if self._des_pnt is None:
             raise ValueError('Cannot connect between design and off design because no design point has been created. Use pyc_add_pnt to add a design point.')
 
@@ -237,37 +237,37 @@ class MPCycle(om.Group):
         elif pnt.options['design'] is False:
             self.add_subsystem(name, pnt, **kwargs)
             self._od_pnts.append(pnt)
-            
+
         return pnt
 
 
-    def configure(self): 
-        # after all child pts have been set up, 
+    def configure(self):
+        # after all child pts have been set up,
         # promote any cycle parameters to this level and set their default values
         # then issue connections between the design and off-design points
 
-        for param, (val, units) in self._cycle_params.items(): 
+        for param, (val, units) in self._cycle_params.items():
             self.set_input_defaults(name=param, val=val, units=units)
-        
+
             self.promotes(self._des_pnt.name, inputs=[param])
-            for pnt in self._od_pnts: 
+            for pnt in self._od_pnts:
                 self.promotes(pnt.name, inputs=[param])
 
 
-        for src, target in self._des_od_connections: 
-            for od_pnt in self._od_pnts: 
+        for src, target in self._des_od_connections:
+            for od_pnt in self._od_pnts:
                 self.connect(f'{self._des_pnt.name}.{src}', f'{od_pnt.name}.{target}')
-        
-        if self._use_default_des_od_conns: 
+
+        if self._use_default_des_od_conns:
             skip = self._default_des_od_cons_skip
-            for elem in self._des_pnt._elements: 
-                if  skip is not None and elem.name in skip: 
+            for elem in self._des_pnt._elements:
+                if  skip is not None and elem.name in skip:
                     continue
-                try: 
-                    for src, target in elem.default_des_od_conns: 
-                        for od_pnt in self._od_pnts: 
+                try:
+                    for src, target in elem.default_des_od_conns:
+                        for od_pnt in self._od_pnts:
                             self.connect( f'{self._des_pnt.name}.{elem.name}.{src}', f'{od_pnt.name}.{elem.name}.{target}')
-                except AttributeError: 
+                except AttributeError:
                     pass # no des-to-od conns defined
 
 
